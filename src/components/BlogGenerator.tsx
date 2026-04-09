@@ -16,8 +16,14 @@ import {
   FileText,
   Briefcase,
   FileStack,
-  Globe
+  Globe,
+  Download,
+  Play,
+  Pause,
+  RotateCcw
 } from 'lucide-react';
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
 import { cn } from '@/src/lib/utils';
 import { SEO_KIT_SERVICES, SEO_KIT_STATIC_PAGES } from '../constants/seoKit';
 import { BRS_COMPANY_INFO, BRS_PRODUCT_DETAILS, BRS_INTERNAL_LINKS, BRS_EXTERNAL_LINKS } from '../constants/productData';
@@ -92,8 +98,244 @@ export default function BlogGenerator() {
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
   const [viewMode, setViewMode] = useState<'preview' | 'html' | 'markdown'>('preview');
 
+  // Bulk State
+  const [isBulkGenerating, setIsBulkGenerating] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(0);
+  const [bulkTotal, setBulkTotal] = useState(0);
+  const [bulkResults, setBulkResults] = useState<{name: string, content: string, type: 'post' | 'page'}[]>([]);
+  const [bulkStatus, setBulkStatus] = useState('');
+
   const selectedService = useMemo(() => SEO_KIT_SERVICES[selectedServiceIndex], [selectedServiceIndex]);
   const selectedStaticPage = useMemo(() => SEO_KIT_STATIC_PAGES[selectedStaticPageIndex], [selectedStaticPageIndex]);
+
+  const generateSingle = async (type: 'blog' | 'static', serviceIndex?: number, titleIndex?: number, pageIndex?: number, pNum?: number) => {
+    const companyInfo = JSON.stringify(BRS_COMPANY_INFO, null, 2);
+    const internalLinks = BRS_INTERNAL_LINKS.join('\n');
+    const externalLinks = BRS_EXTERNAL_LINKS.join('\n');
+    
+    const commonStyle = `
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Exo+2:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+.brs-post-wrapper { color: #e8f4ff; line-height: 1.9; font-size: 16px; font-family: 'Inter', sans-serif; background: #010409; padding: 40px; border-radius: 24px; max-width: 1000px; margin: 0 auto; border: 1px solid rgba(0, 212, 255, 0.1); }
+.brs-post-wrapper h1, .brs-post-wrapper h2, .brs-post-wrapper h3, .brs-post-wrapper h4 { margin-top: 50px !important; text-transform: none !important; font-family: 'Exo 2', sans-serif; color: #fff; font-weight: 800; }
+.brs-post-wrapper h1 { font-size: clamp(2.2rem, 5vw, 3.8rem); margin-top: 0 !important; color: #00d4ff; border-bottom: 3px solid #ff2d55; padding-bottom: 20px; }
+.brs-post-wrapper h2 { font-size: 2.2rem; color: #00ff88; border-left: 5px solid #ff2d55; padding-left: 20px; }
+.brs-post-wrapper h3 { font-size: 1.8rem; color: #f5c842; }
+.brs-internal-link { color: #00d4ff; text-decoration: none; font-weight: 600; border-bottom: 1px dashed #00d4ff; transition: 0.2s; }
+.brs-internal-link:hover { color: #fff; border-bottom-style: solid; background: rgba(0,212,255,0.1); }
+.brs-img-container { margin: 50px 0; text-align: center; }
+.brs-img-container img { width: 100%; border-radius: 24px; border: 1px solid rgba(0, 212, 255, 0.2); box-shadow: 0 20px 50px rgba(0,0,0,0.6); }
+.brs-img-caption { font-size: 14px; color: #8aadcc; margin-top: 15px; font-style: italic; }
+.brs-toc { background: rgba(255,255,255,0.02); border: 1px solid rgba(0,212,255,0.15); padding: 30px; border-radius: 20px; margin: 50px 0; }
+.brs-highlight-box { background: #060f24; border-left: 6px solid #ff2d55; padding: 35px; border-radius: 0 20px 20px 0; margin: 50px 0; }
+.brs-faq-item { border-bottom: 1px solid rgba(255,255,255,0.05); padding: 20px 0; }
+.brs-faq-q { cursor: pointer; font-weight: 700; font-family: 'Rajdhani', sans-serif; font-size: 18px; display: flex; justify-content: space-between; color: #fff; }
+.brs-faq-a { padding-top: 15px; color: #8aadcc; display: none; }
+.brs-faq-item.active .brs-faq-a { display: block; }
+.brs-cta-block { background: linear-gradient(135deg, #060f24, #0a1f3a); padding: 60px; border-radius: 30px; text-align: center; margin-top: 80px; border: 1px solid rgba(0,212,255,0.2); }
+.brs-cta-btn { display: inline-block; background: #ff2d55; color: #fff !important; padding: 20px 45px; border-radius: 60px; font-weight: 800; font-family: 'Rajdhani', sans-serif; text-decoration: none !important; font-size: 1.3rem; margin: 15px; box-shadow: 0 10px 20px rgba(255,45,85,0.3); }
+.brs-cta-btn:hover { transform: translateY(-5px); box-shadow: 0 15px 30px rgba(255,45,85,0.5); }
+</style>
+`;
+
+    let prompt = "";
+    let systemInstruction = "";
+
+    if (type === 'static') {
+      const page = SEO_KIT_STATIC_PAGES[pageIndex!];
+      systemInstruction = `You are an expert SEO copywriter and Blogger developer for BRS SIIGNS Trichy, Tamil Nadu, India. Create a complete ready-to-paste HTML page for Blogger using the exact SEO Next Premium template style. Start your entire response with this exact header block only:
+
+<!-- 
+================================================================
+BRS SIGNS TRICHY — ${page.name.toUpperCase()} PAGE
+Focus Keyword: ${page.focusKeyword}
+Target Word Count: 1,200+ Words | 8 Images | 25+ Links | 15 FAQ
+================================================================
+-->
+
+Then immediately output this exact code block without any extra text:
+${commonStyle}`;
+
+      prompt = `Create a full SEO-optimized static page for BRS SIIGNS Trichy, Tamil Nadu, India using the exact page name and primary focus keyword below. 
+      
+      ${HUMANIZATION_RULES}
+
+      IMAGE VARIATION INSTRUCTION: This is page #${Math.floor(Math.random() * 1000)}. Use unique search terms for images that you haven't used in previous generations.
+
+      Company Information to include:
+      ${companyInfo}
+
+      Internal Links for linking:
+      ${internalLinks}
+
+      External Authoritative Links for linking:
+      ${externalLinks}
+
+      Follow every rule from On-Page SEO Master Guide v2.0. Ensure the HTML structure is: H1 -> Featured Image -> (toc) -> Content. 
+      
+      Use unique high-quality stock images from the specified sources. Each image must have perfect alt text containing the focus keyword and a caption + CTA text below it. Add minimum 15 internal links to posts, 10 to pages, and 20+ authoritative external links. For Contact page include a working HTML contact form. End with strong CTA block. Output only the HTML inside the div class brs-post-wrapper. No extra explanation.
+
+Page Name = ${page.name}
+Primary Focus Keyword = ${page.focusKeyword}`;
+    } else {
+      const service = SEO_KIT_SERVICES[serviceIndex!] as any;
+      const title = service.titles[titleIndex!];
+      const productKeyMap: Record<string, string> = {
+        "LED Neon Signs": "ledNeon",
+        "Acrylic Edge Lit Signs": "acrylicEdgeLit",
+        "3D Metal Letters": "metalLetters",
+        "Vinyl Flex Signage with Shield": "vinylFlexShield",
+        "LED Running Displays": "ledRunningDisplays",
+        "Modular Signage Systems": "modularSignage",
+        "Custom Mementos": "customMementos"
+      };
+      const productDetailKey = productKeyMap[service.name];
+      const productSpecifics = productDetailKey ? JSON.stringify((BRS_PRODUCT_DETAILS as any)[productDetailKey], null, 2) : "";
+
+      systemInstruction = `You are an expert SEO copywriter and Blogger developer for BRS SIIGNS Trichy, Tamil Nadu, India. Create a complete ready-to-paste HTML blog post for Blogger using the exact SEO Next Premium template style. Start your entire response with this exact header block only:
+
+<!-- 
+================================================================
+BRS SIGNS TRICHY — BLOG POST #${pNum}: ${service.name}
+"${title}"
+Focus Keyword: ${service.focusKeyword}
+Target Word Count: 2,200+ Words | 12+ Sections | 45+ Links | 15 FAQ | 5+ Images
+Labels: ${service.name}, Trichy, Signage
+Description: SEO optimized guide for ${service.name} in Trichy, Tamil Nadu, India.
+================================================================
+-->
+
+Then immediately output this exact code block without any extra text:
+${commonStyle}`;
+
+      prompt = `Create a full 2,200+ word SEO blog post using the product specifics and company profile provided below. 
+      
+      ${HUMANIZATION_RULES}
+
+      IMAGE VARIATION INSTRUCTION: This is blog post #${pNum}. Use unique search terms for images that you haven't used in previous generations. For the featured image, choose a visual concept that is distinct from other posts in the ${service.name} category.
+
+      Product Specifics (Pain points, benefits, technical specs):
+      ${productSpecifics}
+
+      Company Information:
+      ${companyInfo}
+
+      Internal Links for linking:
+      ${internalLinks}
+
+      External Authoritative Links for linking:
+      ${externalLinks}
+
+      Ensure the HTML structure is: H1 -> Featured Image -> (toc) -> Content. Include pain-points vs benefits tables, lifespan comparison tables, technical specs from the provided data. 
+      
+      Use unique stock images from the specified sources. Each image must have alt text with focus keyword + caption + CTA text below. Minimum 12+ detailed sections + introduction + final verdict. Minimum 15 internal links to posts, 10 to pages, and 20+ authoritative external links. Add 15 detailed FAQ at the end. End with strong CTA block. Output only the HTML inside the div class brs-post-wrapper. No extra explanation.
+
+Product Name = ${service.name}
+Focus Keyword = ${service.focusKeyword}
+Short-tail Keywords = ${service.shortTailKeywords?.join(', ')}
+Long-tail Keywords = ${service.longTailKeywords?.join(', ')}
+Post Number = #${pNum}
+SEO Title = ${title}`;
+    }
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.1-pro-preview",
+      contents: prompt,
+      config: {
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+        systemInstruction: systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
+            alternativeHeadlines: { type: Type.ARRAY, items: { type: Type.STRING } },
+            content: { type: Type.STRING, description: "The full blog post content. If in SEO Kit mode, this should be the FULL HTML including style and link tags." },
+            metaDescription: { type: Type.STRING },
+            keywords: { type: Type.ARRAY, items: { type: Type.STRING } }
+          },
+          required: ["title", "alternativeHeadlines", "content", "metaDescription", "keywords"]
+        }
+      }
+    });
+
+    return JSON.parse(response.text || '{}');
+  };
+
+  const bulkGenerateAll = async () => {
+    setIsBulkGenerating(true);
+    setBulkResults([]);
+    
+    const totalPosts = SEO_KIT_SERVICES.reduce((acc, s) => acc + s.titles.length, 0);
+    const totalPages = SEO_KIT_STATIC_PAGES.length;
+    const total = totalPosts + totalPages;
+    setBulkTotal(total);
+    setBulkProgress(0);
+
+    const results: {name: string, content: string, type: 'post' | 'page'}[] = [];
+
+    // 1. Generate Posts
+    let pNum = 1;
+    for (let sIdx = 0; sIdx < SEO_KIT_SERVICES.length; sIdx++) {
+      const service = SEO_KIT_SERVICES[sIdx];
+      for (let tIdx = 0; tIdx < service.titles.length; tIdx++) {
+        setBulkStatus(`Generating Post ${pNum}/${totalPosts}: ${service.titles[tIdx]}`);
+        try {
+          const data = await generateSingle('blog', sIdx, tIdx, undefined, pNum);
+          results.push({
+            name: `${service.name}_${pNum}.html`,
+            content: data.content,
+            type: 'post'
+          });
+        } catch (e) {
+          console.error(`Failed to generate post ${pNum}`, e);
+        }
+        pNum++;
+        setBulkProgress(prev => prev + 1);
+        await new Promise(r => setTimeout(r, 1000)); // Rate limit buffer
+      }
+    }
+
+    // 2. Generate Pages
+    for (let pIdx = 0; pIdx < SEO_KIT_STATIC_PAGES.length; pIdx++) {
+      const page = SEO_KIT_STATIC_PAGES[pIdx];
+      setBulkStatus(`Generating Page ${pIdx + 1}/${totalPages}: ${page.name}`);
+      try {
+        const data = await generateSingle('static', undefined, undefined, pIdx);
+        results.push({
+          name: `${page.name}.html`,
+          content: data.content,
+          type: 'page'
+        });
+      } catch (e) {
+        console.error(`Failed to generate page ${page.name}`, e);
+      }
+      setBulkProgress(prev => prev + 1);
+      await new Promise(r => setTimeout(r, 1000)); // Rate limit buffer
+    }
+
+    setBulkResults(results);
+    setBulkStatus('Bulk Generation Complete!');
+    setIsBulkGenerating(false);
+  };
+
+  const downloadZip = async () => {
+    const zip = new JSZip();
+    const postsFolder = zip.folder("posts");
+    const pagesFolder = zip.folder("pages");
+
+    bulkResults.forEach(res => {
+      if (res.type === 'post') {
+        postsFolder?.file(res.name, res.content);
+      } else {
+        pagesFolder?.file(res.name, res.content);
+      }
+    });
+
+    const content = await zip.generateAsync({type: "blob"});
+    saveAs(content, "BRS_SIIGNS_SEO_CONTENT.zip");
+  };
 
   const generateBlog = async () => {
     setIsGenerating(true);
@@ -562,7 +804,39 @@ SEO Title = ${title}`;
           </div>
         </div>
 
-        <div className="mt-auto pt-8 border-t border-gray-100">
+        <div className="mt-auto pt-8 border-t border-gray-100 space-y-4">
+          {/* Bulk Generate Button */}
+          <button 
+            onClick={bulkGenerateAll}
+            disabled={isGenerating || isBulkGenerating}
+            className={cn(
+              "w-full py-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 border",
+              isBulkGenerating 
+                ? "bg-gray-50 text-gray-400 border-gray-200" 
+                : "bg-white text-brand-accent border-brand-accent/20 hover:bg-brand-accent/5"
+            )}
+          >
+            {isBulkGenerating ? (
+              <>
+                <Loader2 className="animate-spin" size={14} />
+                Bulk Generating...
+              </>
+            ) : (
+              <>
+                <Play size={14} /> Bulk Generate All (113 Items)
+              </>
+            )}
+          </button>
+
+          {bulkResults.length > 0 && (
+            <button 
+              onClick={downloadZip}
+              className="w-full py-3 rounded-xl font-bold text-xs bg-green-600 text-white transition-all flex items-center justify-center gap-2 shadow-lg shadow-green-600/20"
+            >
+              <Download size={14} /> Download All as ZIP ({bulkResults.length})
+            </button>
+          )}
+
           <div className="flex items-center gap-3 text-gray-400">
             <Settings2 size={16} />
             <span className="text-xs font-medium uppercase tracking-widest">Powered by Gemini 3.1 Pro</span>
@@ -605,7 +879,27 @@ SEO Title = ${title}`;
           </div>
         )}
 
-        {result && !isGenerating && (
+        {isBulkGenerating && (
+          <div className="h-full flex flex-col items-center justify-center space-y-8">
+            <div className="w-full max-w-md space-y-4">
+              <div className="flex justify-between text-sm font-bold">
+                <span>Bulk Progress</span>
+                <span>{Math.round((bulkProgress / bulkTotal) * 100)}%</span>
+              </div>
+              <div className="w-full h-4 bg-gray-100 rounded-full overflow-hidden border border-gray-200">
+                <div 
+                  className="h-full bg-brand-accent transition-all duration-500" 
+                  style={{ width: `${(bulkProgress / bulkTotal) * 100}%` }}
+                />
+              </div>
+              <p className="text-center text-xs text-gray-500 font-medium animate-pulse">
+                {bulkStatus}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {result && !isGenerating && !isBulkGenerating && (
           <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
             {/* Header / Meta Info */}
             <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100 space-y-6">
